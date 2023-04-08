@@ -25,6 +25,7 @@ import datetime
 def train(model, device, loader, optimizer, multicls_criterion):
 
     loss_accum = 0
+    print('New epoch: ', 'loader size = ' + str(len(loader)))
     for step, batch in enumerate(loader):
         batch = batch.to(device)
 
@@ -41,13 +42,12 @@ def train(model, device, loader, optimizer, multicls_criterion):
 
             loss = loss / len(pred_list)
 
-            print(batch)
-
             with torch.autograd.set_detect_anomaly(True):
                 loss.backward()
             optimizer.step()
 
             loss_accum += loss.item()
+            print('Average loss after batch ' + str(step) + ': ' + str(loss_accum / (step + 1)))
 
     print('Average training loss: {}'.format(loss_accum / (step + 1)))
     return loss_accum / (step + 1)
