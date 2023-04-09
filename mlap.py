@@ -1,7 +1,8 @@
 import torch
 from torch.nn import Linear, Sequential, ReLU
 
-from torch_geometric.nn.conv import GINConv
+#from torch_geometric.nn.conv import GINConv
+from convs.gin import GINConv
 from torch_geometric.nn.norm import GraphNorm
 from torch_geometric.nn.glob import AttentionalAggregation
 
@@ -21,7 +22,7 @@ class MLAP_GIN(torch.nn.Module):
 
         # GIN layers
         self.layers = torch.nn.ModuleList(
-            [GINConv(Sequential(
+            [GINConv(dim_h, Sequential(
                 Linear(dim_h, dim_h),
                 ReLU(),
                 Linear(dim_h, dim_h))) for _ in range(depth)])
@@ -42,6 +43,7 @@ class MLAP_GIN(torch.nn.Module):
 
         x = batched_data.x
         edge_index = batched_data.edge_index
+        edge_attr = batched_data.edge_attr
         node_depth = batched_data.node_depth
         batch = batched_data.batch
 
@@ -50,7 +52,7 @@ class MLAP_GIN(torch.nn.Module):
         for d in range(self.depth):
             x_in = x
 
-            x = self.layers[d](x, edge_index)
+            x = self.layers[d](x, edge_index, edge_attr)
             if (self.norm):
                 x = self.norm[d](x, batch)
             if (d < self.depth - 1):

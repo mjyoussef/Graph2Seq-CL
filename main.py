@@ -104,8 +104,6 @@ def main():
 
     dataset = PygGraphPropPredDataset(dataset_name)
 
-    #seq_len_list = np.array([len(seq) for seq in dataset.data.y])
-
     split_idx = dataset.get_idx_split()
 
     vocab2idx, idx2vocab = get_vocab_mapping([dataset.data.y[i] for i in split_idx['train']], num_vocab)
