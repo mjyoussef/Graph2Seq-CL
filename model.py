@@ -30,3 +30,6 @@ class Model(torch.nn.Module):
         # for each batch, the prediction for the ith word is a logit
         # decoding each prediction to a word is done in the evaluation task in main
         return predictions
+
+# see GRACE model: https://github.com/CRIPAC-DIG/GCA/blob/cd6a9f0cf06c0b8c48e108a6aab743585f6ba6f1/pGRACE/model.py
+# contrastive loss term is in the loss function
