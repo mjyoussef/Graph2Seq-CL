@@ -26,6 +26,9 @@ def train(model, device, loader, optimizer, multicls_criterion):
 
     loss_accum = 0
     print('New epoch: ', 'loader size = ' + str(len(loader)))
+
+    # TODO: cut down on the # of batches per epoch
+
     for step, batch in enumerate(loader):
         batch = batch.to(device)
 
@@ -38,6 +41,7 @@ def train(model, device, loader, optimizer, multicls_criterion):
 
             loss = 0
             for i in range(len(pred_list)):
+                # TODO: add contrasitve learning regularization
                 loss += multicls_criterion(pred_list[i].to(torch.float32), batch.y_arr[:, i])
 
             loss = loss / len(pred_list)

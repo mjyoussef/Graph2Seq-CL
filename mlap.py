@@ -9,7 +9,7 @@ from torch_geometric.nn.glob import AttentionalAggregation
 from torch.nn import functional as F
 
 class MLAP_GIN(torch.nn.Module):
-    def __init__(self, dim_h, depth, node_encoder, norm=False, residual=False):
+    def __init__(self, dim_h, depth, node_encoder, norm=False, residual=False, dropout=False):
         super(MLAP_GIN, self).__init__()
 
         self.dim_h = dim_h
@@ -19,6 +19,7 @@ class MLAP_GIN(torch.nn.Module):
 
         self.norm = norm
         self.residual = residual
+        self.dropout = dropout
 
         # GIN layers
         self.layers = torch.nn.ModuleList(
@@ -37,6 +38,8 @@ class MLAP_GIN(torch.nn.Module):
                            ReLU(), 
                            Linear(2*self.dim_h, 1))) for _ in range(depth)])
         
+        # TODO: locally store contrastive learning loss
+        
     def forward(self, batched_data):
 
         self.graph_embs = []
@@ -49,6 +52,7 @@ class MLAP_GIN(torch.nn.Module):
 
         x = self.node_encoder(x, node_depth.view(-1,))
 
+        # TODO: compute contrastive learning loss for each layer and store
         for d in range(self.depth):
             x_in = x
 
@@ -57,6 +61,8 @@ class MLAP_GIN(torch.nn.Module):
                 x = self.norm[d](x, batch)
             if (d < self.depth - 1):
                 x = F.relu(x)
+            if (self.dropout):
+                x = F.dropout(x)
             if (self.residual):
                 x = x + x_in
             
