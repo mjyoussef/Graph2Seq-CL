@@ -18,7 +18,8 @@ class Model(torch.nn.Module):
 
         self.device = device
 
-        self.gnn = MLAP_Weighted(dim_h, depth, node_encoder, norm=True, residual=True)
+        # TODO: add contrastive learning loss here
+        self.gnn = MLAP_Weighted(dim_h, depth, node_encoder, norm=True, residual=True, dropout=True)
 
         self.decoder = LSTMDecoder(dim_h, max_seq_len, vocab2idx, device)
 
