@@ -1,6 +1,7 @@
-import torch
 import numpy as np
 import torch
+from torch_geometric.utils import dropout_edge, degree, to_undirected, scatter, to_networkx
+import networkx as nx
 
 class ASTNodeEncoder(torch.nn.Module):
     '''
@@ -29,7 +30,8 @@ class ASTNodeEncoder(torch.nn.Module):
 
     def forward(self, x, depth):
         depth[depth > self.max_depth] = self.max_depth
-        return self.type_encoder(x[:,0]) + self.attribute_encoder(x[:,1]) + self.depth_encoder(depth)
+        mlp_input = torch.hstack((self.type_encoder(x[:,0]), self.attribute_encoder(x[:,1]), self.depth_encoder(depth)))
+        return self.node_mlp(mlp_input)
 
 
 
@@ -174,30 +176,196 @@ def decode_arr_to_seq(arr, idx2vocab):
     return list(map(lambda x: idx2vocab[x], clippted_arr.cpu()))
 
 
-# def test():
-#     seq_list = [['a', 'b'], ['a', 'b', 'c', 'df', 'f', '2edea', 'a'], ['eraea', 'a', 'c'], ['d'], ['4rq4f','f','a','a', 'g']]
-#     vocab2idx, idx2vocab = get_vocab_mapping(seq_list, 4)
-#     print(vocab2idx)
-#     print(idx2vocab)
-#     print()
-#     assert(len(vocab2idx) == len(idx2vocab))
+# ---- CAP functions ----
+# from: https://github.com/CRIPAC-DIG/GCA/blob/cd6a9f0cf06c0b8c48e108a6aab743585f6ba6f1/pGRACE/functional.py
+# and: https://github.com/CRIPAC-DIG/GCA/blob/cd6a9f0cf06c0b8c48e108a6aab743585f6ba6f1/pGRACE/utils.py
 
-#     for vocab, idx in vocab2idx.items():
-#         assert(idx2vocab[idx] == vocab)
+def compute_pr(edge_index, damp: float = 0.85, k: int = 10):
+    # page rank
+    # interesting comment: https://github.com/CRIPAC-DIG/GCA/issues/4
+    num_nodes = edge_index.max().item() + 1
+    deg_out = degree(edge_index[0])
+    x = torch.ones((num_nodes, )).to(edge_index.device).to(torch.float32)
+
+    for i in range(k):
+        edge_msg = x[edge_index[0]] / deg_out[edge_index[0]]
+        agg_msg = scatter(edge_msg, edge_index[1], reduce='sum')
+
+        x = (1 - damp) * x + damp * agg_msg
+
+    return x
+
+def eigenvector_centrality(data):
+    graph = to_networkx(data)
+    x = nx.eigenvector_centrality_numpy(graph)
+    x = [x[i] for i in range(data.num_nodes)]
+    return torch.tensor(x, dtype=torch.float32).to(data.edge_index.device)
 
 
-#     for seq in seq_list:
-#         print(seq)
-#         arr = encode_seq_to_arr(seq, vocab2idx, max_seq_len = 4)[0]
-#         # Test the effect of predicting __EOS__
-#         # arr[2] = vocab2idx['__EOS__']
-#         print(arr)
-#         seq_dec = decode_arr_to_seq(arr, idx2vocab)
+def drop_feature(x, drop_prob):
+    drop_mask = torch.empty((x.size(1),), dtype=torch.float32, device=x.device).uniform_(0, 1) < drop_prob
+    x = x.clone()
+    x[:, drop_mask] = 0
 
-#         print(arr)
-#         print(seq_dec)
-#         print('')
+    return x
 
 
-# if __name__ == '__main__':
-#     test()
+def drop_feature_weighted(x, w, p: float, threshold: float = 0.7):
+    w = w / w.mean() * p
+    w = w.where(w < threshold, torch.ones_like(w) * threshold)
+    drop_prob = w.repeat(x.size(0)).view(x.size(0), -1)
+
+    drop_mask = torch.bernoulli(drop_prob).to(torch.bool)
+
+    x = x.clone()
+    x[drop_mask] = 0.
+
+    return x
+
+
+def drop_feature_weighted_2(x, w, p: float, threshold: float = 0.7):
+    w = w / w.mean() * p
+    w = w.where(w < threshold, torch.ones_like(w) * threshold)
+    drop_prob = w
+
+    drop_mask = torch.bernoulli(drop_prob).to(torch.bool)
+
+    x = x.clone()
+    x[:, drop_mask] = 0.
+
+    return x
+
+
+def feature_drop_weights(x, node_c):
+    x = x.to(torch.bool).to(torch.float32)
+    w = x.t() @ node_c
+    w = w.log()
+    s = (w.max() - w) / (w.max() - w.mean())
+
+    return s
+
+
+def feature_drop_weights_dense(x, node_c):
+    x = x.abs()
+    w = x.t() @ node_c
+    w = w.log()
+    s = (w.max() - w) / (w.max() - w.mean())
+
+    return s
+
+
+def drop_edge_weighted(edge_index, edge_weights, p: float, threshold: float = 1.):
+    edge_weights = edge_weights / edge_weights.mean() * p
+    edge_weights = edge_weights.where(edge_weights < threshold, torch.ones_like(edge_weights) * threshold)
+    sel_mask = torch.bernoulli(1. - edge_weights).to(torch.bool)
+
+    return edge_index[:, sel_mask]
+
+
+def degree_drop_weights(edge_index):
+    edge_index_ = to_undirected(edge_index)
+    deg = degree(edge_index_[1])
+    deg_col = deg[edge_index[1]].to(torch.float32)
+    s_col = torch.log(deg_col)
+    weights = (s_col.max() - s_col) / (s_col.max() - s_col.mean())
+
+    return weights
+
+
+def pr_drop_weights(edge_index, aggr: str = 'sink', k: int = 10):
+    pv = compute_pr(edge_index, k=k)
+    pv_row = pv[edge_index[0]].to(torch.float32)
+    pv_col = pv[edge_index[1]].to(torch.float32)
+    s_row = torch.log(pv_row)
+    s_col = torch.log(pv_col)
+    if aggr == 'sink':
+        s = s_col
+    elif aggr == 'source':
+        s = s_row
+    elif aggr == 'mean':
+        s = (s_col + s_row) * 0.5
+    else:
+        s = s_col
+    weights = (s.max() - s) / (s.max() - s.mean())
+
+    return weights
+
+
+def evc_drop_weights(data):
+    evc = eigenvector_centrality(data)
+    evc = evc.where(evc > 0, torch.zeros_like(evc))
+    evc = evc + 1e-8
+    s = evc.log()
+
+    edge_index = data.edge_index
+    s_row, s_col = s[edge_index[0]], s[edge_index[1]]
+    s = s_col
+
+    return (s.max() - s) / (s.max() - s.mean())
+
+def graph_perturb(data, drop_scheme='pr'):
+  if drop_scheme == 'degree':
+      drop_weights = degree_drop_weights(data.edge_index)
+      edge_index_ = to_undirected(data.edge_index)
+      node_deg = degree(edge_index_[1])
+      feature_weights = feature_drop_weights(data.x, node_c=node_deg)
+  elif drop_scheme == 'pr':
+      drop_weights = pr_drop_weights(data.edge_index, aggr='sink', k=200)
+      node_pr = compute_pr(data.edge_index)
+      feature_weights = feature_drop_weights(data.x, node_c=node_pr)
+  elif drop_scheme == 'evc':
+      drop_weights = evc_drop_weights(data)
+      node_evc = eigenvector_centrality(data)
+      feature_weights = feature_drop_weights(data.x, node_c=node_evc)
+  else:
+      feature_weights = torch.ones((data.x.size(1),))
+      drop_weights = None
+  
+  return feature_weights, drop_weights
+
+def drop_edge(data, drop_edge_rate, drop_weights, drop_scheme='pr', drop_edge_weighted_threshold=0.7):
+  if drop_scheme == 'uniform':
+      return dropout_edge(data.edge_index, p=drop_edge_rate)[0]
+  elif drop_scheme in ['degree', 'evc', 'pr']:
+      return drop_edge_weighted(
+          data.edge_index, 
+          drop_weights, 
+          p=drop_edge_rate, 
+          threshold=drop_edge_weighted_threshold
+      )
+  else:
+      raise Exception(f'undefined drop scheme: {drop_scheme}')
+
+def get_contrastive_graph_pair(data, drop_scheme='pr', drop_feature_rates=(0.7, 0.7), drop_edge_rates=(0.5, 0.5)):
+  # use augmentation scheme to determine the weights of each node
+  # i.e. pagerank, eigenvector centrality, node degree
+  feat_weights, drop_weights = graph_perturb(data, drop_scheme)
+
+  # apply drop edge according to computed features
+  dr_e_1, dr_e_2 = drop_edge_rates
+  edge_index_1 = drop_edge(data, dr_e_1, drop_weights, drop_scheme)
+  edge_index_2 = drop_edge(data, dr_e_2, drop_weights, drop_scheme)
+
+  dr_f_1, dr_f_2 = drop_feature_rates
+
+  if drop_scheme in ['pr', 'degree', 'evc']:
+    # graph-aware drop feature
+    x_1 = drop_feature_weighted_2(data.x, feat_weights, dr_f_1)
+    e_1 = drop_feature_weighted_2(data.edge_attr, feat_weights, dr_f_1)
+    
+    x_2 = drop_feature_weighted_2(data.x, feat_weights, dr_f_2)
+    e_2 = drop_feature_weighted_2(data.edge_attr, feat_weights, dr_f_2)
+  else:
+    # naive drop feature
+    x_1 = drop_feature(data.x, dr_f_1)
+    e_1 = drop_feature(data.edge_attr, dr_f_1)
+    
+    x_2 = drop_feature(data.x, dr_f_2)
+    e_2 = drop_feature(data.edge_attr, dr_f_2)
+
+  return (
+      # graph 1
+      (x_1, edge_index_1, e_1),
+      # graph 2
+      (x_2, edge_index_2, e_2)
+  )

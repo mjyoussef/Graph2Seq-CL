@@ -1,18 +1,22 @@
 import torch
-from torch.nn import Linear, Sequential, ReLU
+from torch.nn import Linear, Sequential, ReLU, ELU
 
-#from torch_geometric.nn.conv import GINConv
-from convs.gin import GINConv
+from torch_geometric.nn.conv import GINConv
+#from convs.gin import GINConv
 from torch_geometric.nn.norm import GraphNorm
+from torch_geometric.data import Data
 from torch_geometric.nn.glob import AttentionalAggregation
 
 from torch.nn import functional as F
 
+from utils import get_contrastive_graph_pair
+
 class MLAP_GIN(torch.nn.Module):
-    def __init__(self, dim_h, depth, node_encoder, norm=False, residual=False, dropout=False):
+    def __init__(self, dim_h, batch_size, depth, node_encoder, norm=False, residual=False, dropout=False):
         super(MLAP_GIN, self).__init__()
 
         self.dim_h = dim_h
+        self.batch_size = batch_size
         self.depth = depth
 
         self.node_encoder = node_encoder
@@ -21,9 +25,16 @@ class MLAP_GIN(torch.nn.Module):
         self.residual = residual
         self.dropout = dropout
 
+        # non-linear projection function for cl task
+        self.projection = Sequential(
+            Linear(dim_h, int(dim_h/8)),
+            ELU(),
+            Linear(int(dim_h/8), dim_h)
+        )
+
         # GIN layers
         self.layers = torch.nn.ModuleList(
-            [GINConv(dim_h, Sequential(
+            [GINConv(Sequential(
                 Linear(dim_h, dim_h),
                 ReLU(),
                 Linear(dim_h, dim_h))) for _ in range(depth)])
@@ -38,25 +49,55 @@ class MLAP_GIN(torch.nn.Module):
                            ReLU(), 
                            Linear(2*self.dim_h, 1))) for _ in range(depth)])
         
-        # TODO: locally store contrastive learning loss
-        
-    def forward(self, batched_data):
+    def contrastive_loss(self, g1_x, g2_x):
 
-        self.graph_embs = []
+        # compute projections + L2 row-wise normalizations
+        g1_projections = self.projection(g1_x)
+        g1_projections = torch.nn.functional.normalize(g1_projections, p=2, dim=1)
+        g2_projections = self.projection(g2_x)
+        g2_projections = torch.nn.functional.normalize(g2_projections, p=2, dim=1)
+        
+        g1_proj_T = torch.transpose(g1_projections, 0, 1)
+        g2_proj_T = torch.transpose(g2_projections, 0, 1)
+
+        inter_g1 = torch.exp(torch.matmul(g1_projections, g1_proj_T))
+        inter_g2 = torch.exp(torch.matmul(g2_projections, g2_proj_T))
+        intra_view = torch.exp(torch.matmul(g1_projections, g2_proj_T))
+
+        corresponding_terms = torch.diagonal(intra_view.clone(), 0) # main diagonal
+        non_matching_intra = torch.diagonal(intra_view.clone(), -1).sum()
+        non_matching_inter_g1 = torch.diagonal(inter_g1.clone(), -1).sum()
+        non_matching_inter_g2 = torch.diagonal(inter_g2.clone(), -1).sum()
+
+        # inter-view pairs using g1
+        corresponding_terms_g1 = corresponding_terms / (corresponding_terms + non_matching_inter_g1 + non_matching_intra)
+        corresponding_terms_g1 = torch.log(corresponding_terms_g1)
+
+        # inter-view pairs using g2
+        corresponding_terms_g2 = corresponding_terms / (corresponding_terms + non_matching_inter_g2 + non_matching_intra)
+        corresponding_terms_g2 = torch.log(corresponding_terms_g2)
+
+        loss = (corresponding_terms_g1.sum() + corresponding_terms_g2.sum()) / (g1_x.shape[0] + g2_x.shape[0])
+        
+        loss = loss / self.batch_size
+
+        return loss
+    
+    def layer_loop(self, batched_data, cl=False, cl_all=False):
 
         x = batched_data.x
         edge_index = batched_data.edge_index
-        edge_attr = batched_data.edge_attr
+        #edge_attr = batched_data.edge_attr
         node_depth = batched_data.node_depth
         batch = batched_data.batch
 
         x = self.node_encoder(x, node_depth.view(-1,))
 
-        # TODO: compute contrastive learning loss for each layer and store
+        cl_embs = []
         for d in range(self.depth):
             x_in = x
 
-            x = self.layers[d](x, edge_index, edge_attr)
+            x = self.layers[d](x, edge_index)
             if (self.norm):
                 x = self.norm[d](x, batch)
             if (d < self.depth - 1):
@@ -65,14 +106,80 @@ class MLAP_GIN(torch.nn.Module):
                 x = F.dropout(x)
             if (self.residual):
                 x = x + x_in
+
+            if (not cl):
+                h_g = self.att_poolings[d](x, batch)
+                self.graph_embs.append(h_g)
+                continue
+
+            if ((cl and cl_all) or (cl and (d == self.depth-1))):
+                cl_embs += [x]
             
-            h_g = self.att_poolings[d](x, batch)
-            self.graph_embs.append(h_g)
-        
+        return cl_embs
+
+    def forward(self, batched_data, cl=False, cl_all=False):
+
+        self.graph_embs = []
+
+        # contrastive learning task
+        cl_loss = 0
+
+        if (cl):
+            for i in range(self.batch_size):
+                g = batched_data.get_example(i)
+                g1, g2 = get_contrastive_graph_pair(g)
+                g1_data, g2_data = g.clone(), g.clone()
+
+                g1_data.x = g1[0]
+                g1_data.edge_index = g1[1]
+                g1_embs = self.layer_loop(g1_data, cl=cl, cl_all=cl_all)
+
+                g2_data.x = g2[0]
+                g2_data.edge_index = g2[1]
+                g2_embs = self.layer_loop(g2_data, cl=cl, cl_all=cl_all)
+
+                batch_cl_loss = 0
+                for j in range(len(g1_embs)):
+                    batch_cl_loss += self.contrastive_loss(g1_embs[j], g2_embs[j])
+                
+                batch_cl_loss = batch_cl_loss / len(g1_embs)
+
+                cl_loss = cl_loss + batch_cl_loss
+
+
+        # cl_loss = 0
+        # if (cl):
+
+        #     g1, g2 = get_contrastive_graph_pair(batched_data)
+
+        #     g1_data = batched_data.clone()
+        #     g1_data.x = g1[0]
+        #     g1_data.edge_index = g1[1]
+        #     g1_data.edge_attr = g1[2]
+
+        #     g2_data = batched_data.clone()
+        #     g2_data.x = g2[0]
+        #     g2_data.edge_index = g2[1]
+        #     g2_data.edge_attr = g2[2]
+
+        #     g1_embs, g2_embs = self.layer_loop(g1_data, cl=cl, cl_all=cl_all), self.layer_loop(g2_data, cl=cl, cl_all=cl_all)
+
+        #     for i in range(len(g1_embs)):
+        #         g1_data.x = g1_embs[i]
+        #         g2_data.x = g2_embs[i]
+        #         cl_loss += self.contrastive_loss(g1_data, g2_data)
+            
+        #     cl_loss /= len(g1_embs)
+
+        # non-augmented graph
+        # note: populates self.graph_embs
+        self.layer_loop(batched_data)
+
         agg = self.aggregate()
         self.graph_embs.append(agg)
         output = torch.stack(self.graph_embs, dim=0)
-        return output
+
+        return output, cl_loss
     
     def aggregate(self):
         pass

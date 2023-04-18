@@ -22,7 +22,7 @@ from model import Model
 
 import datetime
 
-def train(model, device, loader, optimizer, multicls_criterion):
+def train(model, device, loader, optimizer, multicls_criterion, alpha=0.1):
 
     loss_accum = 0
     print('New epoch: ', 'loader size = ' + str(len(loader)))
@@ -36,15 +36,15 @@ def train(model, device, loader, optimizer, multicls_criterion):
             pass
         else:
             labels = [batch.y[i] for i in range(len(batch.y))]
-            pred_list = model(batch, labels, training=True)
+            pred_list, cl_loss = model(batch, labels, training=True, cl=True, cl_all=False)
             optimizer.zero_grad()
 
             loss = 0
             for i in range(len(pred_list)):
-                # TODO: add contrasitve learning regularization
-                loss += multicls_criterion(pred_list[i].to(torch.float32), batch.y_arr[:, i])
+                loss += (1-alpha) * multicls_criterion(pred_list[i].to(torch.float32), batch.y_arr[:, i])
 
-            loss = loss / len(pred_list)
+            loss /= len(pred_list)
+            loss -= alpha * cl_loss # cl_loss needs to be maximized
 
             with torch.autograd.set_detect_anomaly(True):
                 loss.backward()
@@ -69,7 +69,7 @@ def eval(model, device, loader, evaluator, arr_to_seq):
         else:
             with torch.no_grad():
                 labels = [batch.y[i] for i in range(len(batch.y))]
-                pred_list = model(batch, labels) # training=False by default
+                pred_list, _ = model(batch, labels) # no cl by default
 
             mat = []
             for i in range(len(pred_list)):
