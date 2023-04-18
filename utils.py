@@ -222,7 +222,6 @@ def drop_feature_weighted(x, w, p: float, threshold: float = 0.7):
 
     return x
 
-
 def drop_feature_weighted_2(x, w, p: float, threshold: float = 0.7):
     w = w / w.mean() * p
     w = w.where(w < threshold, torch.ones_like(w) * threshold)
@@ -234,7 +233,6 @@ def drop_feature_weighted_2(x, w, p: float, threshold: float = 0.7):
     x[:, drop_mask] = 0.
 
     return x
-
 
 def feature_drop_weights(x, node_c):
     x = x.to(torch.bool).to(torch.float32)
