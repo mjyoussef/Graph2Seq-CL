@@ -64,10 +64,10 @@ class MLAP_GIN(torch.nn.Module):
         inter_g2 = torch.exp(torch.matmul(g2_projections, g2_proj_T))
         intra_view = torch.exp(torch.matmul(g1_projections, g2_proj_T))
 
-        corresponding_terms = torch.diagonal(intra_view.clone(), 0) # main diagonal
-        non_matching_intra = torch.diagonal(intra_view.clone(), -1).sum()
-        non_matching_inter_g1 = torch.diagonal(inter_g1.clone(), -1).sum()
-        non_matching_inter_g2 = torch.diagonal(inter_g2.clone(), -1).sum()
+        corresponding_terms = torch.diagonal(intra_view, 0) # main diagonal
+        non_matching_intra = torch.diagonal(intra_view, -1).sum()
+        non_matching_inter_g1 = torch.diagonal(inter_g1, -1).sum()
+        non_matching_inter_g2 = torch.diagonal(inter_g2, -1).sum()
 
         # inter-view pairs using g1
         corresponding_terms_g1 = corresponding_terms / (corresponding_terms + non_matching_inter_g1 + non_matching_intra)
@@ -87,7 +87,6 @@ class MLAP_GIN(torch.nn.Module):
 
         x = batched_data.x
         edge_index = batched_data.edge_index
-        #edge_attr = batched_data.edge_attr
         node_depth = batched_data.node_depth
         batch = batched_data.batch
 
@@ -125,7 +124,7 @@ class MLAP_GIN(torch.nn.Module):
         cl_loss = 0
 
         if (cl):
-            for i in range(self.batch_size):
+            for i in range(int(self.batch_size / 5)):
                 g = batched_data.get_example(i)
                 g1, g2 = get_contrastive_graph_pair(g)
                 g1_data, g2_data = g.clone(), g.clone()
@@ -145,31 +144,6 @@ class MLAP_GIN(torch.nn.Module):
                 batch_cl_loss = batch_cl_loss / len(g1_embs)
 
                 cl_loss = cl_loss + batch_cl_loss
-
-
-        # cl_loss = 0
-        # if (cl):
-
-        #     g1, g2 = get_contrastive_graph_pair(batched_data)
-
-        #     g1_data = batched_data.clone()
-        #     g1_data.x = g1[0]
-        #     g1_data.edge_index = g1[1]
-        #     g1_data.edge_attr = g1[2]
-
-        #     g2_data = batched_data.clone()
-        #     g2_data.x = g2[0]
-        #     g2_data.edge_index = g2[1]
-        #     g2_data.edge_attr = g2[2]
-
-        #     g1_embs, g2_embs = self.layer_loop(g1_data, cl=cl, cl_all=cl_all), self.layer_loop(g2_data, cl=cl, cl_all=cl_all)
-
-        #     for i in range(len(g1_embs)):
-        #         g1_data.x = g1_embs[i]
-        #         g2_data.x = g2_embs[i]
-        #         cl_loss += self.contrastive_loss(g1_data, g2_data)
-            
-        #     cl_loss /= len(g1_embs)
 
         # non-augmented graph
         # note: populates self.graph_embs
