@@ -1,4 +1,3 @@
-import random
 import torch
 from torch_geometric.data import DataLoader
 
@@ -22,12 +21,12 @@ from model import Model
 
 import datetime
 
-def train(model, device, loader, optimizer, multicls_criterion):
+def train(model, device, loader, optimizer, scheduler, multicls_criterion, epoch, alpha=0.2):
 
     loss_accum = 0
-    print('New epoch: ', 'loader size = ' + str(len(loader)))
-
-    # TODO: cut down on the # of batches per epoch
+    chkpt_folder = 'checkpoints/epoch' + str(epoch)
+    if (not os.path.exists(chkpt_folder)):
+        os.mkdir(chkpt_folder)
 
     for step, batch in enumerate(loader):
         batch = batch.to(device)
@@ -36,15 +35,16 @@ def train(model, device, loader, optimizer, multicls_criterion):
             pass
         else:
             labels = [batch.y[i] for i in range(len(batch.y))]
-            pred_list = model(batch, labels, training=True)
+            pred_list, cl_loss = model(batch, labels, training=True, cl=True, cl_all=False)
             optimizer.zero_grad()
 
             loss = 0
             for i in range(len(pred_list)):
-                # TODO: add contrasitve learning regularization
-                loss += multicls_criterion(pred_list[i].to(torch.float32), batch.y_arr[:, i])
+                loss += (1-alpha) * multicls_criterion(pred_list[i].to(torch.float32), batch.y_arr[:, i])
 
-            loss = loss / len(pred_list)
+            loss /= len(pred_list)
+            print(cl_loss)
+            loss -= alpha * cl_loss # cl_loss needs to be maximized
 
             with torch.autograd.set_detect_anomaly(True):
                 loss.backward()
@@ -52,6 +52,15 @@ def train(model, device, loader, optimizer, multicls_criterion):
 
             loss_accum += loss.item()
             print('Average loss after batch ' + str(step) + ': ' + str(loss_accum / (step + 1)))
+        
+        if ((step+1) % 35 == 0 or step == len(loader)-1): # save model after every 35 batches
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'loss': loss_accum / (step + 1),
+            }, chkpt_folder + '/model' + str((step+1) // 35) + '.pt')
 
     print('Average training loss: {}'.format(loss_accum / (step + 1)))
     return loss_accum / (step + 1)
@@ -69,7 +78,7 @@ def eval(model, device, loader, evaluator, arr_to_seq):
         else:
             with torch.no_grad():
                 labels = [batch.y[i] for i in range(len(batch.y))]
-                pred_list = model(batch, labels) # training=False by default
+                pred_list, _ = model(batch, labels) # no cl by default
 
             mat = []
             for i in range(len(pred_list)):
@@ -87,7 +96,7 @@ def eval(model, device, loader, evaluator, arr_to_seq):
     return evaluator.eval(input_dict)
 
 
-def main():
+def main(starting_chkpt=None):
     # constants
     dataset_name = "ogbg-code2"
 
@@ -116,9 +125,9 @@ def main():
 
     evaluator = Evaluator(dataset_name)
 
-    train_loader = DataLoader(dataset[split_idx["train"]], batch_size=batch_size, shuffle=True)
-    valid_loader = DataLoader(dataset[split_idx["valid"]], batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(dataset[split_idx["test"]], batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(dataset[ :int(len(dataset)*0.5)], batch_size=batch_size, shuffle=True)
+    valid_loader = DataLoader(dataset[int(len(dataset)*0.5) : int(len(dataset)*0.75)], batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(dataset[int(len(dataset)*0.75): ], batch_size=batch_size, shuffle=False)
 
     nodetypes_mapping = pd.read_csv(os.path.join(dataset.root, 'mapping', 'typeidx2type.csv.gz'))
     nodeattributes_mapping = pd.read_csv(os.path.join(dataset.root, 'mapping', 'attridx2attr.csv.gz'))
@@ -135,16 +144,27 @@ def main():
 
     multicls_criterion = torch.nn.CrossEntropyLoss()
 
+    starting_epoch = 1
+
+    if (starting_chkpt != None):
+        checkpoint = torch.load(starting_chkpt)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+
+        starting_epoch = checkpoint['epoch']
+
+
     valid_curve = []
     test_curve = []
     train_curve = []
     trainL_curve = []
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(starting_epoch, epochs + 1):
         print (datetime.datetime.now().strftime('%Y.%m.%d-%H:%M:%S'))
         print("Epoch {} training...".format(epoch))
         print ("lr: ", optimizer.param_groups[0]['lr'])
-        train_loss = train(model, device, train_loader, optimizer, multicls_criterion)
+        train_loss = train(model, device, train_loader, optimizer, scheduler, multicls_criterion, epoch)
 
         scheduler.step()
 

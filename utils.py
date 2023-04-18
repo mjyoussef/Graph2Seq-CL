@@ -1,9 +1,6 @@
-import torch
 import numpy as np
 import torch
-import torch
-from torch_scatter import scatter
-from torch_geometric.utils import dropout_adj, degree, to_undirected
+from torch_geometric.utils import dropout_edge, degree, to_undirected, scatter, to_networkx
 import networkx as nx
 
 class ASTNodeEncoder(torch.nn.Module):
@@ -33,7 +30,8 @@ class ASTNodeEncoder(torch.nn.Module):
 
     def forward(self, x, depth):
         depth[depth > self.max_depth] = self.max_depth
-        return self.type_encoder(x[:,0]) + self.attribute_encoder(x[:,1]) + self.depth_encoder(depth)
+        mlp_input = torch.hstack((self.type_encoder(x[:,0]), self.attribute_encoder(x[:,1]), self.depth_encoder(depth)))
+        return self.node_mlp(mlp_input)
 
 
 
@@ -224,7 +222,6 @@ def drop_feature_weighted(x, w, p: float, threshold: float = 0.7):
 
     return x
 
-
 def drop_feature_weighted_2(x, w, p: float, threshold: float = 0.7):
     w = w / w.mean() * p
     w = w.where(w < threshold, torch.ones_like(w) * threshold)
@@ -236,7 +233,6 @@ def drop_feature_weighted_2(x, w, p: float, threshold: float = 0.7):
     x[:, drop_mask] = 0.
 
     return x
-
 
 def feature_drop_weights(x, node_c):
     x = x.to(torch.bool).to(torch.float32)
@@ -327,7 +323,7 @@ def graph_perturb(data, drop_scheme='pr'):
 
 def drop_edge(data, drop_edge_rate, drop_weights, drop_scheme='pr', drop_edge_weighted_threshold=0.7):
   if drop_scheme == 'uniform':
-      return dropout_adj(data.edge_index, p=drop_edge_rate)[0]
+      return dropout_edge(data.edge_index, p=drop_edge_rate)[0]
   elif drop_scheme in ['degree', 'evc', 'pr']:
       return drop_edge_weighted(
           data.edge_index, 
@@ -369,107 +365,5 @@ def get_contrastive_graph_pair(data, drop_scheme='pr', drop_feature_rates=(0.7, 
       # graph 1
       (x_1, edge_index_1, e_1),
       # graph 2
-      (x_2, edge_index_2, e_2),
+      (x_2, edge_index_2, e_2)
   )
-
-# example usage in MLAP_GIN: see forward function
-"""
-class MLAP_GIN(torch.nn.Module):
-    def __init__(self, dim_h, depth, node_encoder, norm=False, residual=False):
-        super(MLAP_GIN, self).__init__()
-
-        self.dim_h = dim_h
-        self.depth = depth
-
-        self.node_encoder = node_encoder
-
-        self.norm = norm
-        self.residual = residual
-
-        # GIN layers
-        self.layers = torch.nn.ModuleList(
-            [GINConv(dim_h, Sequential(
-                Linear(dim_h, dim_h),
-                ReLU(),
-                Linear(dim_h, dim_h))) for _ in range(depth)]
-        )
-
-        # normalization layers
-        self.norm = torch.nn.ModuleList([GraphNorm(dim_h) for _ in range(self.depth)])
-
-        # layer-wise attention poolings
-        self.att_poolings = torch.nn.ModuleList(
-            [AttentionalAggregation(
-                Sequential(
-                    Linear(self.dim_h, 2*self.dim_h),
-                    ReLU(),
-                    Linear(2*self.dim_h, 1))) for _ in range(depth)
-            ]
-        )
-
-    def forward(self, batched_data):
-        self.graph_embs = []
-
-        x = batched_data.x
-        edge_index = batched_data.edge_index
-        edge_attr = batched_data.edge_attr
-        node_depth = batched_data.node_depth
-        batch = batched_data.batch
-
-        # graph augmentation step
-        g_1, g_2 = get_contrastive_graph_pair(batched_data)
-        print(g_1)
-        print(g_2)
-
-        x = self.node_encoder(x, node_depth.view(-1,))
-
-        for d in range(self.depth):
-            x_in = x
-
-            x = self.layers[d](x, edge_index, edge_attr)
-            if (self.norm):
-                x = self.norm[d](x, batch)
-            if (d < self.depth - 1):
-                x = F.relu(x)
-            if (self.residual):
-                x = x + x_in
-
-            h_g = self.att_poolings[d](x, batch)
-            self.graph_embs.append(h_g)
-
-        agg = self.aggregate()
-        self.graph_embs.append(agg)
-        output = torch.stack(self.graph_embs, dim=0)
-        return output
-
-    def aggregate(self):
-        pass
-"""
-
-# def test():
-#     seq_list = [['a', 'b'], ['a', 'b', 'c', 'df', 'f', '2edea', 'a'], ['eraea', 'a', 'c'], ['d'], ['4rq4f','f','a','a', 'g']]
-#     vocab2idx, idx2vocab = get_vocab_mapping(seq_list, 4)
-#     print(vocab2idx)
-#     print(idx2vocab)
-#     print()
-#     assert(len(vocab2idx) == len(idx2vocab))
-
-#     for vocab, idx in vocab2idx.items():
-#         assert(idx2vocab[idx] == vocab)
-
-
-#     for seq in seq_list:
-#         print(seq)
-#         arr = encode_seq_to_arr(seq, vocab2idx, max_seq_len = 4)[0]
-#         # Test the effect of predicting __EOS__
-#         # arr[2] = vocab2idx['__EOS__']
-#         print(arr)
-#         seq_dec = decode_arr_to_seq(arr, idx2vocab)
-
-#         print(arr)
-#         print(seq_dec)
-#         print('')
-
-
-# if __name__ == '__main__':
-#     test()
