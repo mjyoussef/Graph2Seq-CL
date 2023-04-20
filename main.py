@@ -51,7 +51,6 @@ def train(model, device, loader, optimizer, scheduler, multicls_criterion, epoch
                 loss -= alpha * cl_loss
 
             if (dgi_task):
-                print(dgi_loss)
                 loss -= alpha * dgi_loss
 
             with torch.autograd.set_detect_anomaly(True):
@@ -203,4 +202,4 @@ def main(starting_chkpt=None, cl=False, cl_all=False, dgi_task=False):
                   best_val_epoch, best_train, min(trainL_curve)))
 
 if __name__ == "__main__":
-    main(cl=True, cl_all=False, dgi_task=False)
+    main(cl=False, cl_all=False, dgi_task=True)

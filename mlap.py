@@ -42,6 +42,7 @@ class MLAP_GIN(torch.nn.Module):
         self.residual = residual
         self.dropout = dropout
 
+        self.loss_fn = torch.nn.BCELoss(reduction='sum')
         self.discriminator = DISC(dim_h)
 
         # non-linear projection function for cl task
@@ -139,35 +140,41 @@ class MLAP_GIN(torch.nn.Module):
         edge_index = batched_data.edge_index
         batch = batched_data.batch
 
-        final_layer_embs = self.layer_loop(x_emb, edge_index, batch, dgi_task=dgi_task)
+        self.layer_loop(x_emb, edge_index, batch, dgi_task=dgi_task)
 
         agg = self.aggregate()
         self.graph_embs.append(agg)
         output = torch.stack(self.graph_embs, dim=0)
 
         # # dgi task
-        # dgi_loss = 0
-        # if (dgi_task):
-        #     for i in range(int(self.batch_size / 5)):
-        #         g = batched_data.get_example(i)
-        #         g_diff = get_contrastive_graph_pair(g, dgi_task=True)
-        #         g_diff_data = g.clone()
-        #         g_diff_data.x = g_diff[0]
-        #         g_diff_data.edge_index = g_diff[1]
+        dgi_loss = 0
+        if (dgi_task):
+            for i in range(int(self.batch_size / 5)):
+                g = batched_data.get_example(i)
+                g_clone = g.clone()
+                nd = g.node_depth
+                b = g.batch
+                g_clone.x = self.node_encoder(g_clone.x, nd.view(-1,).clone())
+                g_diff = get_contrastive_graph_pair(g_clone, dgi_task=True)
 
-        #         final_layer_embs = final_layer_embs[0]
-        #         g_diff_embs = self.layer_loop(g_diff_data, dgi_task=True)[0]
+                g_diff_embs = self.layer_loop(g_diff[0], g_diff[1], b, dgi_task=True)[0]
 
-        #         # dgi objective on final_layer_embs, g_diff_embs, and output
-        #         agg = agg.clone()
-        #         positive = torch.log(self.discriminator(final_layer_embs, agg[i]))
-        #         negative = torch.log(1. - self.discriminator(g_diff_embs, agg[i]))
+                g.x = self.node_encoder(g.x, nd.view(-1,).clone())
+                g_embs = self.layer_loop(g.x, g.edge_index, g.batch, dgi_task=True)[0]
 
-        #         dgi_loss += (positive.sum() + negative.sum()) / (positive.shape[0] + negative.shape[0])
+                # dgi objective on final_layer_embs, g_diff_embs, and output
+                agg = agg.clone()
+                positive = self.discriminator(g_embs, agg[i])
+                ones = torch.ones_like(positive)
+                negative = self.discriminator(g_diff_embs, agg[i])
+                zeros = torch.zeros_like(negative)
+
+                dgi_loss += (self.loss_fn(positive, ones) + self.loss_fn(negative, zeros)) / (positive.shape[0] + negative.shape[0])
             
-        #     dgi_loss /= int(self.batch_size / 5)
+            dgi_loss /= int(self.batch_size / 5)
 
         # contrastive learning task
+        
         cl_loss = 0
 
         if (cl):
@@ -199,7 +206,7 @@ class MLAP_GIN(torch.nn.Module):
             
             cl_loss /= int(self.batch_size / 5)
 
-        return output, cl_loss, 0
+        return output, cl_loss, dgi_loss
     
     def aggregate(self):
         pass
