@@ -222,7 +222,6 @@ def drop_feature_weighted(x, w, p: float, threshold: float = 0.7):
 
     return x
 
-
 def drop_feature_weighted_2(x, w, p: float, threshold: float = 0.7, dgi_task=False):
     w = w / w.mean() * p
     # if (dgi_task):
@@ -240,7 +239,6 @@ def drop_feature_weighted_2(x, w, p: float, threshold: float = 0.7, dgi_task=Fal
     x[:, drop_mask] = 0.
 
     return x
-
 
 def feature_drop_weights(x, node_c):
     x = x.to(torch.bool).to(torch.float32)
