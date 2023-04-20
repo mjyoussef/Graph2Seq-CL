@@ -1,5 +1,6 @@
+import random, itertools
 import torch
-from torch_geometric.data import DataLoader
+from torch_geometric.loader import DataLoader
 
 import torch.optim as optim
 from torchvision import transforms
@@ -21,7 +22,8 @@ from model import Model
 
 import datetime
 
-def train(model, device, loader, optimizer, scheduler, multicls_criterion, epoch, alpha=0.2, cl=False, cl_all=False, dgi_task=False):
+def train(model, device, loader, optimizer, scheduler, multicls_criterion, epoch, alpha=0.05, 
+        cl=False, cl_all=False, dgi_task=False):
 
     loss_accum = 0
     chkpt_folder = 'checkpoints/epoch' + str(epoch)
@@ -29,6 +31,7 @@ def train(model, device, loader, optimizer, scheduler, multicls_criterion, epoch
         os.mkdir(chkpt_folder)
 
     for step, batch in enumerate(loader):
+
         batch = batch.to(device)
 
         if batch.x.shape[0] == 1 or batch.batch[-1] == 0:
@@ -85,7 +88,7 @@ def eval(model, device, loader, evaluator, arr_to_seq):
         else:
             with torch.no_grad():
                 labels = [batch.y[i] for i in range(len(batch.y))]
-                pred_list, _ = model(batch, labels) # no cl by default
+                pred_list, _, _ = model(batch, labels) # no cl by default
 
             mat = []
             for i in range(len(pred_list)):
@@ -101,6 +104,13 @@ def eval(model, device, loader, evaluator, arr_to_seq):
 
     input_dict = {"seq_ref": seq_ref_list, "seq_pred": seq_pred_list}
     return evaluator.eval(input_dict)
+
+def randomly_mask(dataset, size):
+    bool_mask = np.zeros(len(dataset), dtype=bool)
+    bool_mask[:size] = True
+    np.random.shuffle(bool_mask)
+    out = dataset[bool_mask]
+    return out
 
 
 def main(starting_chkpt=None, cl=False, cl_all=False, dgi_task=False):
@@ -132,9 +142,13 @@ def main(starting_chkpt=None, cl=False, cl_all=False, dgi_task=False):
 
     evaluator = Evaluator(dataset_name)
 
-    train_loader = DataLoader(dataset[ :int(len(dataset)*0.5)], batch_size=batch_size, shuffle=True)
-    valid_loader = DataLoader(dataset[int(len(dataset)*0.5) : int(len(dataset)*0.75)], batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(dataset[int(len(dataset)*0.75): ], batch_size=batch_size, shuffle=False)
+    full_training = randomly_mask(dataset[split_idx["train"]], batch_size*400)
+    full_valid = randomly_mask(dataset[split_idx["valid"]], batch_size*400)
+    full_test = randomly_mask(dataset[split_idx["test"]], batch_size*400)
+
+    train_loader = DataLoader(full_training, batch_size=batch_size, shuffle=True)
+    valid_loader = DataLoader(full_valid, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(full_test, batch_size=batch_size, shuffle=False)
 
     nodetypes_mapping = pd.read_csv(os.path.join(dataset.root, 'mapping', 'typeidx2type.csv.gz'))
     nodeattributes_mapping = pd.read_csv(os.path.join(dataset.root, 'mapping', 'attridx2attr.csv.gz'))
