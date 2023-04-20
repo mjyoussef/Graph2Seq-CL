@@ -25,12 +25,12 @@ class Model(torch.nn.Module):
 
         self.decoder = LSTMDecoder(dim_h, max_seq_len, vocab2idx, device)
 
-    def forward(self, batched_data, labels, training=False, cl=False, cl_all=False):
+    def forward(self, batched_data, labels, training=False, cl=False, cl_all=False, dgi_task=False):
 
-        embeddings, cl_loss = self.gnn(batched_data, cl=cl, cl_all=cl_all)
+        embeddings, cl_loss, dgi_loss = self.gnn(batched_data, cl=cl, cl_all=cl_all, dgi_task=dgi_task)
         predictions = self.decoder(self.batch_size, embeddings, labels, training=training)
 
         # for each batch, the prediction for the ith word is a logit
         # decoding each prediction to a word is done in the evaluation task in main
 
-        return predictions, cl_loss
+        return predictions, cl_loss, dgi_loss

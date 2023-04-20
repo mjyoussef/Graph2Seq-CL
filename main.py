@@ -21,7 +21,7 @@ from model import Model
 
 import datetime
 
-def train(model, device, loader, optimizer, scheduler, multicls_criterion, epoch, alpha=0.2):
+def train(model, device, loader, optimizer, scheduler, multicls_criterion, epoch, alpha=0.2, cl=False, cl_all=False, dgi_task=False):
 
     loss_accum = 0
     chkpt_folder = 'checkpoints/epoch' + str(epoch)
@@ -35,7 +35,7 @@ def train(model, device, loader, optimizer, scheduler, multicls_criterion, epoch
             pass
         else:
             labels = [batch.y[i] for i in range(len(batch.y))]
-            pred_list, cl_loss = model(batch, labels, training=True, cl=True, cl_all=False)
+            pred_list, cl_loss, dgi_loss = model(batch, labels, training=True, cl=cl, cl_all=cl_all, dgi_task=dgi_task)
             optimizer.zero_grad()
 
             loss = 0
@@ -43,8 +43,16 @@ def train(model, device, loader, optimizer, scheduler, multicls_criterion, epoch
                 loss += (1-alpha) * multicls_criterion(pred_list[i].to(torch.float32), batch.y_arr[:, i])
 
             loss /= len(pred_list)
-            print(cl_loss)
-            loss -= alpha * cl_loss # cl_loss needs to be maximized
+
+            if (cl and dgi_task):
+                raise Exception("Cannot use both a contrastive and dgi loss term\n")
+        
+            if (cl):
+                loss -= alpha * cl_loss
+
+            if (dgi_task):
+                print(dgi_loss)
+                loss -= alpha * dgi_loss
 
             with torch.autograd.set_detect_anomaly(True):
                 loss.backward()
@@ -96,7 +104,7 @@ def eval(model, device, loader, evaluator, arr_to_seq):
     return evaluator.eval(input_dict)
 
 
-def main(starting_chkpt=None):
+def main(starting_chkpt=None, cl=False, cl_all=False, dgi_task=False):
     # constants
     dataset_name = "ogbg-code2"
 
@@ -164,7 +172,7 @@ def main(starting_chkpt=None):
         print (datetime.datetime.now().strftime('%Y.%m.%d-%H:%M:%S'))
         print("Epoch {} training...".format(epoch))
         print ("lr: ", optimizer.param_groups[0]['lr'])
-        train_loss = train(model, device, train_loader, optimizer, scheduler, multicls_criterion, epoch)
+        train_loss = train(model, device, train_loader, optimizer, scheduler, multicls_criterion, epoch, cl=cl, cl_all=cl_all, dgi_task=dgi_task)
 
         scheduler.step()
 
@@ -195,4 +203,4 @@ def main(starting_chkpt=None):
                   best_val_epoch, best_train, min(trainL_curve)))
 
 if __name__ == "__main__":
-    main()
+    main(cl=True, cl_all=False, dgi_task=False)

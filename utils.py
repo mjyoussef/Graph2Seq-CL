@@ -223,12 +223,18 @@ def drop_feature_weighted(x, w, p: float, threshold: float = 0.7):
     return x
 
 
-def drop_feature_weighted_2(x, w, p: float, threshold: float = 0.7):
+def drop_feature_weighted_2(x, w, p: float, threshold: float = 0.7, dgi_task=False):
     w = w / w.mean() * p
+    # if (dgi_task):
+    #     threshold = 0.9
+
     w = w.where(w < threshold, torch.ones_like(w) * threshold)
     drop_prob = w
 
-    drop_mask = torch.bernoulli(drop_prob).to(torch.bool)
+    if (dgi_task):
+        drop_mask = torch.bernoulli(1. - drop_prob).to(torch.bool)
+    else:
+        drop_mask = torch.bernoulli(drop_prob).to(torch.bool)
 
     x = x.clone()
     x[:, drop_mask] = 0.
@@ -254,10 +260,17 @@ def feature_drop_weights_dense(x, node_c):
     return s
 
 
-def drop_edge_weighted(edge_index, edge_weights, p: float, threshold: float = 1.):
+def drop_edge_weighted(edge_index, edge_weights, p: float, threshold: float = 1., dgi_task=False):
     edge_weights = edge_weights / edge_weights.mean() * p
+    # if (dgi_task):
+    #     threshold = 0.9
+
     edge_weights = edge_weights.where(edge_weights < threshold, torch.ones_like(edge_weights) * threshold)
-    sel_mask = torch.bernoulli(1. - edge_weights).to(torch.bool)
+
+    if (dgi_task): # drop edges by importance
+        sel_mask = torch.bernoulli(edge_weights).to(torch.bool)
+    else:
+        sel_mask = torch.bernoulli(1. - edge_weights).to(torch.bool)
 
     return edge_index[:, sel_mask]
 
@@ -323,7 +336,7 @@ def graph_perturb(data, drop_scheme='pr'):
   
   return feature_weights, drop_weights
 
-def drop_edge(data, drop_edge_rate, drop_weights, drop_scheme='pr', drop_edge_weighted_threshold=0.7):
+def drop_edge(data, drop_edge_rate, drop_weights, drop_scheme='pr', drop_edge_weighted_threshold=0.7, dgi_task=False):
   if drop_scheme == 'uniform':
       return dropout_edge(data.edge_index, p=drop_edge_rate)[0]
   elif drop_scheme in ['degree', 'evc', 'pr']:
@@ -331,41 +344,48 @@ def drop_edge(data, drop_edge_rate, drop_weights, drop_scheme='pr', drop_edge_we
           data.edge_index, 
           drop_weights, 
           p=drop_edge_rate, 
-          threshold=drop_edge_weighted_threshold
-      )
+          threshold=drop_edge_weighted_threshold,
+          dgi_task=dgi_task
+        )
   else:
       raise Exception(f'undefined drop scheme: {drop_scheme}')
 
-def get_contrastive_graph_pair(data, drop_scheme='pr', drop_feature_rates=(0.7, 0.7), drop_edge_rates=(0.5, 0.5)):
+def get_contrastive_graph_pair(data, drop_scheme='pr', drop_feature_rates=(0.7, 0.7), drop_edge_rates=(0.5, 0.5), dgi_task=False):
   # use augmentation scheme to determine the weights of each node
   # i.e. pagerank, eigenvector centrality, node degree
   feat_weights, drop_weights = graph_perturb(data, drop_scheme)
 
   # apply drop edge according to computed features
   dr_e_1, dr_e_2 = drop_edge_rates
-  edge_index_1 = drop_edge(data, dr_e_1, drop_weights, drop_scheme)
-  edge_index_2 = drop_edge(data, dr_e_2, drop_weights, drop_scheme)
+  edge_index_1 = drop_edge(data, dr_e_1, drop_weights, drop_scheme, dgi_task=dgi_task)
+
+  if (not dgi_task):
+    edge_index_2 = drop_edge(data, dr_e_2, drop_weights, drop_scheme)
 
   dr_f_1, dr_f_2 = drop_feature_rates
 
   if drop_scheme in ['pr', 'degree', 'evc']:
     # graph-aware drop feature
-    x_1 = drop_feature_weighted_2(data.x, feat_weights, dr_f_1)
-    e_1 = drop_feature_weighted_2(data.edge_attr, feat_weights, dr_f_1)
-    
-    x_2 = drop_feature_weighted_2(data.x, feat_weights, dr_f_2)
-    e_2 = drop_feature_weighted_2(data.edge_attr, feat_weights, dr_f_2)
+    x_1 = drop_feature_weighted_2(data.x, feat_weights, dr_f_1, dgi_task=dgi_task)
+    #e_1 = drop_feature_weighted_2(data.edge_attr, feat_weights, dr_f_1)
+
+    if (not dgi_task):
+        x_2 = drop_feature_weighted_2(data.x, feat_weights, dr_f_2, dgi_task=dgi_task)
+        #e_2 = drop_feature_weighted_2(data.edge_attr, feat_weights, dr_f_2)
   else:
     # naive drop feature
     x_1 = drop_feature(data.x, dr_f_1)
-    e_1 = drop_feature(data.edge_attr, dr_f_1)
+    #e_1 = drop_feature(data.edge_attr, dr_f_1)
     
     x_2 = drop_feature(data.x, dr_f_2)
     e_2 = drop_feature(data.edge_attr, dr_f_2)
+  
+  if dgi_task:
+      return (x_1, edge_index_1)
 
   return (
       # graph 1
-      (x_1, edge_index_1, e_1),
+      (x_1, edge_index_1),
       # graph 2
-      (x_2, edge_index_2, e_2)
-  )
+      (x_2, edge_index_2)
+      )
