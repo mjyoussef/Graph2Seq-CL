@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from utils import encode_y_to_arr, encode_seq_to_arr
+from utils import encode_seq_to_arr
 
 class LSTMDecoder(torch.nn.Module):
     def __init__(self, dim_h, max_seq_len, vocab2idx, device):

@@ -1,9 +1,6 @@
 import torch
 from mlap import MLAP_Weighted
 from decoders import LSTMDecoder
-from utils import get_contrastive_graph_pair
-from torch_geometric.data import Data
-from torch.nn import Sequential, Linear, ELU
 
 class Model(torch.nn.Module):
     def __init__(self, batch_size, depth, dim_h, max_seq_len, node_encoder, vocab2idx, device):
