@@ -4,6 +4,19 @@ from torch.nn import functional as F
 
 from utils import encode_seq_to_arr
 
+
+class LinearDecoder(torch.nn.Module):
+    def __init__(self, dim_h, max_seq_len, vocab2idx, device):
+        super().__init__()
+        self.max_seq_len = max_seq_len
+        self.vocab2idx = vocab2idx
+
+        self.decoders = nn.ModuleList([nn.Linear(dim_h, len(vocab2idx)) for _ in range(max_seq_len)])
+
+    def forward(self, batch_size, layer_reps, labels, training=False):
+        return [d(layer_reps[-1]) for d in self.decoders]
+
+
 class LSTMDecoder(torch.nn.Module):
     def __init__(self, dim_h, max_seq_len, vocab2idx, device):
         super(LSTMDecoder, self).__init__()

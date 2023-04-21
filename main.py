@@ -215,4 +215,4 @@ def main(starting_chkpt=None, cl=False, cl_all=False, dgi_task=False):
                   best_val_epoch, best_train, min(trainL_curve)))
 
 if __name__ == "__main__":
-    main(cl=False, cl_all=False, dgi_task=True)
+    main(cl=False, cl_all=False, dgi_task=False)

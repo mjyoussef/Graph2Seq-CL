@@ -1,6 +1,6 @@
 import torch
 from mlap import MLAP_Weighted
-from decoders import LSTMDecoder
+from decoders import LSTMDecoder, LinearDecoder
 
 class Model(torch.nn.Module):
     def __init__(self, batch_size, depth, dim_h, max_seq_len, node_encoder, vocab2idx, device):
@@ -20,7 +20,7 @@ class Model(torch.nn.Module):
         
         self.gnn = MLAP_Weighted(dim_h, batch_size, depth, node_encoder, norm=True, residual=True, dropout=True)
 
-        self.decoder = LSTMDecoder(dim_h, max_seq_len, vocab2idx, device)
+        self.decoder = LinearDecoder(dim_h, max_seq_len, vocab2idx, device)
 
     def forward(self, batched_data, labels, training=False, cl=False, cl_all=False, dgi_task=False):
 
