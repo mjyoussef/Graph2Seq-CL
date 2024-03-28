@@ -1,9 +1,6 @@
-import torch
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import remove_self_loops
-
 from torch.nn import Linear, BatchNorm1d
-
 class GINConv(MessagePassing):
     def __init__(self, dim_h, mlp, **kwargs):
         super(GINConv, self).__init__(aggr='add', **kwargs)
@@ -13,7 +10,6 @@ class GINConv(MessagePassing):
         self.bn = BatchNorm1d(dim_h)
 
         self.edge_encoder = Linear(2, dim_h)
-
     
     def forward(self, x, edge_index, edge_attr):
         edge_attr = self.edge_encoder(edge_attr)

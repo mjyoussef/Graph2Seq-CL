@@ -1,26 +1,19 @@
 import torch
-from torch.nn import Linear, Sequential, ReLU, ELU
-
+from torch.nn import Module, Linear, Sequential, ReLU
 from torch_geometric.nn.conv import GINConv
-#from convs.gin import GINConv
 from torch_geometric.nn.norm import GraphNorm
-from torch_geometric.data import Data
 from torch_geometric.nn.glob import AttentionalAggregation
-
 from torch.nn import functional as F
-
 from utils import get_contrastive_graph_pair
 
-class MLAP_GIN(torch.nn.Module):
+class MLAP_GIN(Module):
     def __init__(self, dim_h, batch_size, depth, node_encoder, norm=False, residual=False, dropout=False):
         super(MLAP_GIN, self).__init__()
 
         self.dim_h = dim_h
         self.batch_size = batch_size
         self.depth = depth
-
         self.node_encoder = node_encoder
-
         self.norm = norm
         self.residual = residual
         self.dropout = dropout
@@ -28,16 +21,20 @@ class MLAP_GIN(torch.nn.Module):
         # non-linear projection function for cl task
         self.projection = Sequential(
             Linear(dim_h, int(dim_h/8)),
-            ELU(),
+            ReLU(),
             Linear(int(dim_h/8), dim_h)
         )
 
         # GIN layers
         self.layers = torch.nn.ModuleList(
-            [GINConv(Sequential(
-                Linear(dim_h, dim_h),
-                ReLU(),
-                Linear(dim_h, dim_h))) for _ in range(depth)])
+            [GINConv(
+                Sequential(
+                    Linear(dim_h, dim_h),
+                    ReLU(),
+                    Linear(dim_h, dim_h)
+                )
+            ) for _ in range(depth)]
+        )
             
         # normalization layers
         self.norm = torch.nn.ModuleList([GraphNorm(dim_h) for _ in range(self.depth)])
@@ -45,17 +42,21 @@ class MLAP_GIN(torch.nn.Module):
         # layer-wise attention poolings
         self.att_poolings = torch.nn.ModuleList(
             [AttentionalAggregation(
-                Sequential(Linear(self.dim_h, 2*self.dim_h), 
-                           ReLU(), 
-                           Linear(2*self.dim_h, 1))) for _ in range(depth)])
+                Sequential(
+                    Linear(dim_h, 2*dim_h),
+                    ReLU(),
+                    Linear(2*dim_h, 1)
+                )
+            ) for _ in range(depth)]
+        )
         
     def contrastive_loss(self, g1_x, g2_x):
 
         # compute projections + L2 row-wise normalizations
         g1_projections = self.projection(g1_x)
-        g1_projections = torch.nn.functional.normalize(g1_projections, p=2, dim=1)
+        g1_projections = F.normalize(g1_projections, p=2, dim=1)
         g2_projections = self.projection(g2_x)
-        g2_projections = torch.nn.functional.normalize(g2_projections, p=2, dim=1)
+        g2_projections = F.normalize(g2_projections, p=2, dim=1)
         
         g1_proj_T = torch.transpose(g1_projections, 0, 1)
         g2_proj_T = torch.transpose(g2_projections, 0, 1)
@@ -146,7 +147,7 @@ class MLAP_GIN(torch.nn.Module):
                 cl_loss = cl_loss + batch_cl_loss
 
         # non-augmented graph
-        # note: populates self.graph_embs
+        # note: this populates self.graph_embs
         self.layer_loop(batched_data)
 
         agg = self.aggregate()

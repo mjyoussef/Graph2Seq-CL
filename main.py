@@ -1,25 +1,17 @@
 import torch
 from torch_geometric.data import DataLoader
-
 import torch.optim as optim
 from torchvision import transforms
-
 import numpy as np
 import pandas as pd
 import os
-
-# importing OGB
 from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
-
 import sys
-sys.path.append('../..')
-
 from utils import ASTNodeEncoder, get_vocab_mapping, augment_edge, encode_y_to_arr, decode_arr_to_seq
-
-# model
-from model import Model
-
+from models.model import Model
 import datetime
+
+sys.path.append('../..')
 
 def train(model, device, loader, optimizer, scheduler, multicls_criterion, epoch, alpha=0.2):
 
@@ -99,10 +91,8 @@ def eval(model, device, loader, evaluator, arr_to_seq):
 def main(starting_chkpt=None):
     # constants
     dataset_name = "ogbg-code2"
-
     num_vocab = 5000
     max_seq_len = 5
-
     depth = 3
     batch_size = 50
     epochs = 50
@@ -110,9 +100,7 @@ def main(starting_chkpt=None):
     step_size = 10
     decay_rate = 0.1
     weight_decay = 0.00005
-
     dim_h = 512
-
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     dataset = PygGraphPropPredDataset(dataset_name)
@@ -154,7 +142,6 @@ def main(starting_chkpt=None):
 
         starting_epoch = checkpoint['epoch']
 
-
     valid_curve = []
     test_curve = []
     train_curve = []
@@ -189,7 +176,6 @@ def main(starting_chkpt=None):
     print('Finished training!')
     print('Best validation score: {}'.format(valid_curve[best_val_epoch]))
     print('Test score: {}'.format(test_curve[best_val_epoch]))
-
     print('Finished test: {}, Validation: {}, Train: {}, epoch: {}, best train: {}, best loss: {}'
           .format(test_curve[best_val_epoch], valid_curve[best_val_epoch], train_curve[best_val_epoch],
                   best_val_epoch, best_train, min(trainL_curve)))
